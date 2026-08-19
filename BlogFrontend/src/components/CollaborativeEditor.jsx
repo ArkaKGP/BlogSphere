@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, Component } from 'react';
+import React, { useEffect, useState, useMemo, useRef, Component } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Collaboration from '@tiptap/extension-collaboration';
