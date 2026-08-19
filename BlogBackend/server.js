@@ -32,11 +32,19 @@ const { initYWebSocketServer } = require('./services/yWebSocketServer');
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Socket.io with CORS
+// Dynamic CORS origin handler supporting credentials across Vercel, localhost, and custom domains
+const allowedOrigins = (origin, callback) => {
+  // Allow requests with no origin (like mobile apps, curl, postman)
+  if (!origin) return callback(null, true);
+  return callback(null, true);
+};
+
+// Initialize Socket.io with dynamic CORS
 const io = new Server(server, {
   cors: {
-    origin: '*', // Accepts requests from Vite frontend
-    methods: ['GET', 'POST'],
+    origin: allowedOrigins,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
+    credentials: true,
   },
 });
 
@@ -48,10 +56,10 @@ initYWebSocketServer(server);
 // Middleware
 app.use(express.json());
 
-// CORS config
+// CORS config for Express HTTP API routes
 app.use(
   cors({
-    origin: '*',
+    origin: allowedOrigins,
     credentials: true,
   })
 );
