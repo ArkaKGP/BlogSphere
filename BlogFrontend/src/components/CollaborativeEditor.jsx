@@ -60,6 +60,37 @@ class EditorErrorBoundary extends Component {
   }
 }
 
+/**
+ * Helper to deduplicate repeated HTML content blocks (e.g. 2x or 3x duplications)
+ */
+const deduplicateHtmlContent = (content) => {
+  if (!content || typeof content !== 'string') return content;
+  const trimmed = content.trim();
+
+  // Check for 3x exact repetition
+  if (trimmed.length % 3 === 0) {
+    const chunkLen = trimmed.length / 3;
+    const c1 = trimmed.slice(0, chunkLen);
+    const c2 = trimmed.slice(chunkLen, chunkLen * 2);
+    const c3 = trimmed.slice(chunkLen * 2);
+    if (c1 === c2 && c2 === c3) {
+      return c1;
+    }
+  }
+
+  // Check for 2x exact repetition
+  if (trimmed.length % 2 === 0) {
+    const chunkLen = trimmed.length / 2;
+    const c1 = trimmed.slice(0, chunkLen);
+    const c2 = trimmed.slice(chunkLen);
+    if (c1 === c2) {
+      return c1;
+    }
+  }
+
+  return content;
+};
+
 const InnerEditor = ({
   ydoc,
   provider,
@@ -70,6 +101,11 @@ const InnerEditor = ({
   onSave,
 }) => {
   const userColor = useMemo(() => getUserColor(username), [username]);
+  const hasSeededRef = useRef(false);
+
+  const cleanInitialContent = useMemo(() => {
+    return deduplicateHtmlContent(initialContent);
+  }, [initialContent]);
 
   const editor = useEditor({
     extensions: [
@@ -101,12 +137,41 @@ const InnerEditor = ({
     },
   });
 
-  // Seed initial content into Y.Doc if Y.Doc is empty
+  // Seed initial content into Y.Doc ONLY if the document is genuinely empty AFTER Yjs WebSocket sync completes
   useEffect(() => {
-    if (editor && initialContent && ydoc.getXmlFragment('default').length === 0) {
-      editor.commands.setContent(initialContent);
+    if (!editor || !provider || !cleanInitialContent) return;
+
+    const performSeeding = () => {
+      if (hasSeededRef.current) return;
+
+      const xmlFragment = ydoc.getXmlFragment('default');
+      const fragmentStr = xmlFragment.toString().trim();
+
+      // Only seed if Yjs document is empty on both server and client
+      const isEmpty = xmlFragment.length === 0 || !fragmentStr || fragmentStr === '<paragraph></paragraph>';
+
+      if (isEmpty) {
+        hasSeededRef.current = true;
+        editor.commands.setContent(cleanInitialContent);
+      } else {
+        hasSeededRef.current = true;
+      }
+    };
+
+    if (provider.synced) {
+      performSeeding();
+    } else {
+      const handleSync = (isSynced) => {
+        if (isSynced) {
+          performSeeding();
+        }
+      };
+      provider.on('sync', handleSync);
+      return () => {
+        provider.off('sync', handleSync);
+      };
     }
-  }, [editor, initialContent, ydoc]);
+  }, [editor, provider, cleanInitialContent, ydoc]);
 
   if (!editor) {
     return (

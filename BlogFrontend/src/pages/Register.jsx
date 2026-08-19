@@ -104,12 +104,18 @@ const Register = () => {
           username: formData.username   // optional, if your schema accepts it
         }
       );
-      setFormData({username:'',email:'',confirmPassword:'',password:''})
-      // ③ store token & optionally redirect
+      const userData = {
+        _id: res.data._id,
+        username: res.data.username || formData.username,
+        email: res.data.email
+      };
+
+      // Store token & user info
       localStorage.setItem('token', res.data.token);
-      localStorage.setItem('user', JSON.stringify({ email: res.data.email }));
-      // e.g. navigate('/dashboard');
+      localStorage.setItem('user', JSON.stringify(userData));
+
       toast.success('Registration successful!');
+      navigate('/');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Registration failed');
     } finally {

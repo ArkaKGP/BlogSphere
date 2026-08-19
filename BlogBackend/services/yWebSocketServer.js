@@ -41,12 +41,44 @@ const yFragmentToHTML = (xmlFragment) => {
 };
 
 /**
+ * Helper to deduplicate repeated HTML content blocks (e.g. 2x or 3x duplications)
+ */
+const deduplicateHtmlContent = (content) => {
+  if (!content || typeof content !== 'string') return content;
+  const trimmed = content.trim();
+
+  // Check for 3x exact repetition
+  if (trimmed.length % 3 === 0) {
+    const chunkLen = trimmed.length / 3;
+    const c1 = trimmed.slice(0, chunkLen);
+    const c2 = trimmed.slice(chunkLen, chunkLen * 2);
+    const c3 = trimmed.slice(chunkLen * 2);
+    if (c1 === c2 && c2 === c3) {
+      return c1;
+    }
+  }
+
+  // Check for 2x exact repetition
+  if (trimmed.length % 2 === 0) {
+    const chunkLen = trimmed.length / 2;
+    const c1 = trimmed.slice(0, chunkLen);
+    const c2 = trimmed.slice(chunkLen);
+    if (c1 === c2) {
+      return c1;
+    }
+  }
+
+  return content;
+};
+
+/**
  * Persists current Y.Doc HTML content to MongoDB
  */
 const saveRoomToDB = async (docName, room) => {
   try {
     const xmlFragment = room.doc.getXmlFragment('default');
-    const htmlContent = yFragmentToHTML(xmlFragment);
+    const rawHtml = yFragmentToHTML(xmlFragment);
+    const htmlContent = deduplicateHtmlContent(rawHtml);
 
     if (htmlContent) {
       await Blog.findByIdAndUpdate(docName, { description: htmlContent });

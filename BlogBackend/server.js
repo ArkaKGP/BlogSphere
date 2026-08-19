@@ -78,18 +78,21 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api', mailRoutes);
 
 // Socket.io Online User Tracking Mechanism
-// Map userId -> socketId
+// Map userId (string) -> socketId (string)
 const userSocketMap = {};
 
 const getReceiverSocketId = (receiverId) => {
-  return userSocketMap[receiverId];
+  if (!receiverId) return null;
+  return userSocketMap[String(receiverId)];
 };
 
 io.on('connection', (socket) => {
-  const userId = socket.handshake.query.userId;
+  const rawUserId = socket.handshake.query.userId;
+  const userId = rawUserId && rawUserId !== 'undefined' && rawUserId !== 'null' ? String(rawUserId) : null;
+
   console.log(`⚡ Client connected: Socket ID ${socket.id}, User ID: ${userId}`);
 
-  if (userId && userId !== 'undefined') {
+  if (userId) {
     userSocketMap[userId] = socket.id;
   }
 
@@ -120,7 +123,7 @@ io.on('connection', (socket) => {
         io.to(receiverSocketId).emit('newMessage', newMessage);
       }
 
-      // Emit back to sender as confirmation
+      // 4. Emit back to sender socket so sender UI updates instantaneously
       socket.emit('newMessage', newMessage);
     } catch (error) {
       console.error('Error handling sendMessage event:', error);
@@ -131,9 +134,14 @@ io.on('connection', (socket) => {
   // Handle socket disconnect
   socket.on('disconnect', () => {
     console.log(`🔌 Client disconnected: Socket ID ${socket.id}`);
-    if (userId && userId !== 'undefined') {
-      delete userSocketMap[userId];
+    
+    // Purge socket ID entry from userSocketMap
+    for (const [uid, sid] of Object.entries(userSocketMap)) {
+      if (sid === socket.id) {
+        delete userSocketMap[uid];
+      }
     }
+
     io.emit('getOnlineUsers', Object.keys(userSocketMap));
   });
 });

@@ -9,8 +9,10 @@ export const SocketProvider = ({ children }) => {
   const [onlineUsers, setOnlineUsers] = useState([]);
   const { isLoggedIn, user } = useAuth();
 
+  const currentUserId = user?._id || user?.id;
+
   useEffect(() => {
-    if (isLoggedIn && user && user._id) {
+    if (isLoggedIn && currentUserId) {
       const serverUrl =
         import.meta.env.VITE_BASE_URL ||
         import.meta.env.REACT_APP_BASE_URL ||
@@ -18,14 +20,18 @@ export const SocketProvider = ({ children }) => {
 
       const newSocket = io(serverUrl, {
         query: {
-          userId: user._id,
+          userId: String(currentUserId),
         },
+        transports: ['websocket', 'polling'],
+        withCredentials: true,
       });
 
       setSocket(newSocket);
 
       newSocket.on('getOnlineUsers', (users) => {
-        setOnlineUsers(users);
+        if (Array.isArray(users)) {
+          setOnlineUsers(users.map((u) => String(u)));
+        }
       });
 
       return () => {
@@ -38,7 +44,7 @@ export const SocketProvider = ({ children }) => {
         setSocket(null);
       }
     }
-  }, [isLoggedIn, user?._id]);
+  }, [isLoggedIn, currentUserId]);
 
   return (
     <SocketContext.Provider value={{ socket, onlineUsers }}>

@@ -27,6 +27,9 @@ const Chat = () => {
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
 
+  // Unread badge count per user ID { [userId]: count }
+  const [unreadCounts, setUnreadCounts] = useState({});
+
   const messagesEndRef = useRef(null);
 
   const BASE_URL =
@@ -82,17 +85,50 @@ const Chat = () => {
     if (!socket) return;
 
     const handleNewMessage = (newMessage) => {
+      // 1. If message belongs to active open chat, append to messages
       if (
         activeConversation &&
-        newMessage.conversationId === activeConversation._id
+        String(newMessage.conversationId) === String(activeConversation._id)
       ) {
-        setMessages((prev) => [...prev, newMessage]);
+        setMessages((prev) => {
+          if (newMessage._id && prev.some((m) => m._id === newMessage._id)) {
+            return prev;
+          }
+          return [...prev, newMessage];
+        });
       }
 
-      // Update conversations list last message
-      setConversations((prevConvs) =>
-        prevConvs.map((conv) => {
-          if (conv._id === newMessage.conversationId) {
+      // 2. WhatsApp-style Unread Badge & Toast Notification logic
+      if (String(newMessage.senderId) !== String(user?._id)) {
+        const isCurrentChatOpen =
+          selectedUser && String(selectedUser._id) === String(newMessage.senderId);
+
+        if (!isCurrentChatOpen) {
+          setUnreadCounts((prev) => ({
+            ...prev,
+            [newMessage.senderId]: (prev[newMessage.senderId] || 0) + 1,
+          }));
+
+          const sender = users.find((u) => String(u._id) === String(newMessage.senderId));
+          const senderName = sender ? sender.username : 'Someone';
+
+          toast(`📩 ${senderName}: "${newMessage.text.slice(0, 35)}${newMessage.text.length > 35 ? '...' : ''}"`, {
+            style: {
+              background: '#121214',
+              color: '#f5e6c8',
+              border: '1px solid #c9a84c',
+            },
+            duration: 4000,
+          });
+        }
+      }
+
+      // 3. Update conversations list last message & timestamp
+      setConversations((prevConvs) => {
+        let found = false;
+        const updated = prevConvs.map((conv) => {
+          if (String(conv._id) === String(newMessage.conversationId)) {
+            found = true;
             return {
               ...conv,
               lastMessage: newMessage,
@@ -100,8 +136,18 @@ const Chat = () => {
             };
           }
           return conv;
-        })
-      );
+        });
+
+        if (!found) {
+          // Re-fetch conversations if new conversation created
+          axios
+            .get(`${BASE_URL}/api/chat/conversations`, getHeaders())
+            .then((res) => setConversations(res.data))
+            .catch(() => {});
+        }
+
+        return updated;
+      });
     };
 
     socket.on('newMessage', handleNewMessage);
@@ -109,12 +155,18 @@ const Chat = () => {
     return () => {
       socket.off('newMessage', handleNewMessage);
     };
-  }, [socket, activeConversation]);
+  }, [socket, activeConversation, selectedUser, user?._id, users]);
 
   // Handle selecting a user to start/continue a chat
   const handleSelectUser = async (targetUser) => {
     setSelectedUser(targetUser);
     setLoadingMessages(true);
+
+    // Clear unread badge counter for this selected user
+    setUnreadCounts((prev) => ({
+      ...prev,
+      [targetUser._id]: 0,
+    }));
 
     try {
       // 1. Get or create conversation
@@ -162,7 +214,16 @@ const Chat = () => {
 
   // Utility to check online status
   const isUserOnline = (userId) => {
-    return onlineUsers.includes(userId);
+    if (!userId) return false;
+    return onlineUsers.includes(String(userId));
+  };
+
+  // Helper to find last message for a user
+  const getLastMessage = (userId) => {
+    const conv = conversations.find((c) =>
+      c.participants?.some((p) => String(p._id || p) === String(userId))
+    );
+    return conv?.lastMessage;
   };
 
   // Filter users by search query
@@ -236,7 +297,7 @@ const Chat = () => {
             </div>
           </div>
 
-          {/* Users List */}
+          {/* Users List (WhatsApp Style) */}
           <div className="flex-1 overflow-y-auto divide-y divide-[#1e1c18]/50">
             {loadingUsers ? (
               <div className="flex items-center justify-center p-8 text-[#9c9486]">
@@ -250,6 +311,8 @@ const Chat = () => {
               filteredUsers.map((u) => {
                 const online = isUserOnline(u._id);
                 const isSelected = selectedUser?._id === u._id;
+                const lastMsg = getLastMessage(u._id);
+                const unreadCount = unreadCounts[u._id] || 0;
 
                 return (
                   <button
@@ -261,31 +324,56 @@ const Chat = () => {
                         : 'hover:bg-[#151518]'
                     }`}
                   >
+                    {/* User Avatar & Online Indicator */}
                     <div className="relative flex-shrink-0">
                       <div className="w-11 h-11 rounded-full bg-gradient-to-br from-[#e5ca7a]/20 to-[#c9a84c]/40 border border-[#c9a84c]/30 text-[#f5e6c8] font-bold text-sm flex items-center justify-center">
                         {getInitials(u.username)}
                       </div>
                       <span
                         className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#0e0e10] ${
-                          online ? 'bg-emerald-500' : 'bg-gray-600'
+                          online ? 'bg-emerald-500 shadow-sm shadow-emerald-500/50' : 'bg-gray-600'
                         }`}
                       ></span>
                     </div>
 
+                    {/* User Info, Message Preview & Unread Counter */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
-                        <p className="text-sm font-semibold text-[#f5e6c8] truncate">
+                        <p className={`text-sm font-semibold truncate ${unreadCount > 0 ? 'text-white font-bold' : 'text-[#f5e6c8]'}`}>
                           {u.username}
                         </p>
-                        {online && (
-                          <span className="text-[10px] text-emerald-400 font-medium">
+                        {lastMsg?.createdAt ? (
+                          <span className="text-[10px] text-[#9c9486] font-medium shrink-0 ml-1">
+                            {formatTime(lastMsg.createdAt)}
+                          </span>
+                        ) : online ? (
+                          <span className="text-[10px] text-emerald-400 font-medium shrink-0 ml-1">
                             Online
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <div className="flex items-center justify-between mt-1">
+                        <p className={`text-xs truncate ${unreadCount > 0 ? 'text-[#f5e6c8] font-semibold' : 'text-[#9c9486]'}`}>
+                          {lastMsg ? (
+                            <>
+                              {String(lastMsg.senderId) === String(user?._id) && (
+                                <span className="text-[#c9a84c] font-semibold mr-1">You:</span>
+                              )}
+                              {lastMsg.text}
+                            </>
+                          ) : (
+                            u.email
+                          )}
+                        </p>
+
+                        {/* WhatsApp-Style Glowing Unread Badge */}
+                        {unreadCount > 0 && (
+                          <span className="ml-2 px-2 py-0.5 text-[10px] font-black bg-gradient-to-r from-emerald-500 to-teal-400 text-black rounded-full shadow-md shadow-emerald-500/30 animate-pulse shrink-0">
+                            {unreadCount}
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-[#9c9486] truncate">
-                        {u.email}
-                      </p>
                     </div>
                   </button>
                 );
@@ -351,7 +439,7 @@ const Chat = () => {
                   </div>
                 ) : (
                   messages.map((msg, idx) => {
-                    const isMe = msg.senderId === user?._id;
+                    const isMe = String(msg.senderId) === String(user?._id);
 
                     return (
                       <div
@@ -401,7 +489,7 @@ const Chat = () => {
                 <button
                   type="submit"
                   disabled={!text.trim()}
-                  className="p-3 bg-gradient-to-r from-[#e5ca7a] via-[#c9a84c] to-[#b8943f] text-black font-bold rounded-full hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md shadow-[#c9a84c]/20 flex items-center justify-center"
+                  className="p-3 bg-gradient-to-r from-[#e5ca7a] via-[#c9a84c] to-[#b8943f] text-black font-bold rounded-full hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-md shadow-[#c9a84c]/20 flex items-center justify-center cursor-pointer"
                 >
                   <Send className="w-5 h-5" />
                 </button>
