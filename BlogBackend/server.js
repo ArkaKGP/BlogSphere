@@ -1,0 +1,171 @@
+require('dotenv').config();
+
+const dns = require('dns');
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder('ipv4first');
+}
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1']);
+} catch (e) {}
+
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const mongoose = require('mongoose');
+const cors = require('cors');
+
+// Models
+const Conversation = require('./models/Conversation');
+const Message = require('./models/Message');
+
+// Import routes
+const blogroute = require('./routes/Blogs');
+const authroute = require('./routes/auth');
+const mailRoutes = require('./routes/mail');
+const chatRoutes = require('./routes/chat');
+const notificationRoutes = require('./routes/notifications');
+
+// Import Yjs WebSocket server service
+const { initYWebSocketServer } = require('./services/yWebSocketServer');
+
+// Initialize express app
+const app = express();
+const server = http.createServer(app);
+
+// Initialize Socket.io with CORS
+const io = new Server(server, {
+  cors: {
+    origin: '*', // Accepts requests from Vite frontend
+    methods: ['GET', 'POST'],
+  },
+});
+
+app.set('io', io);
+
+// Initialize Yjs WebSocket server for real-time document editing
+initYWebSocketServer(server);
+
+// Middleware
+app.use(express.json());
+
+// CORS config
+app.use(
+  cors({
+    origin: '*',
+    credentials: true,
+  })
+);
+
+// Logging middleware
+app.use((req, res, next) => {
+  console.log(req.method, req.path);
+  next();
+});
+
+// Routes
+app.use('/api/blogs', blogroute);
+app.use('/api/auth', authroute);
+app.use('/api/chat', chatRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api', mailRoutes);
+
+// Socket.io Online User Tracking Mechanism
+// Map userId -> socketId
+const userSocketMap = {};
+
+const getReceiverSocketId = (receiverId) => {
+  return userSocketMap[receiverId];
+};
+
+io.on('connection', (socket) => {
+  const userId = socket.handshake.query.userId;
+  console.log(`⚡ Client connected: Socket ID ${socket.id}, User ID: ${userId}`);
+
+  if (userId && userId !== 'undefined') {
+    userSocketMap[userId] = socket.id;
+  }
+
+  // Broadcast list of online user IDs to all connected clients
+  io.emit('getOnlineUsers', Object.keys(userSocketMap));
+
+  // Listener for sending a message
+  socket.on('sendMessage', async ({ senderId, receiverId, text, conversationId }) => {
+    try {
+      if (!senderId || !text || !conversationId) return;
+
+      // 1. Save new message to MongoDB
+      const newMessage = await Message.create({
+        conversationId,
+        senderId,
+        text,
+      });
+
+      // 2. Update conversation's lastMessage reference
+      await Conversation.findByIdAndUpdate(conversationId, {
+        lastMessage: newMessage._id,
+        updatedAt: new Date(),
+      });
+
+      // 3. Emit message to receiver in real-time if online
+      const receiverSocketId = getReceiverSocketId(receiverId);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit('newMessage', newMessage);
+      }
+
+      // Emit back to sender as confirmation
+      socket.emit('newMessage', newMessage);
+    } catch (error) {
+      console.error('Error handling sendMessage event:', error);
+      socket.emit('error', { message: 'Failed to send message' });
+    }
+  });
+
+  // Handle socket disconnect
+  socket.on('disconnect', () => {
+    console.log(`🔌 Client disconnected: Socket ID ${socket.id}`);
+    if (userId && userId !== 'undefined') {
+      delete userSocketMap[userId];
+    }
+    io.emit('getOnlineUsers', Object.keys(userSocketMap));
+  });
+});
+
+// Helper function to start server
+const startServer = () => {
+  const PORT = process.env.PORT || 5000;
+  server.listen(PORT, () => {
+    console.log(`🚀 Server running with WebSockets on port ${PORT}`);
+  });
+};
+
+// Connect to MongoDB
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONG_URI);
+    console.log('✅ Connected to MongoDB Atlas');
+    startServer();
+  } catch (err) {
+    console.warn('⚠️ Standard SRV connection failed, attempting Direct Seedlist connection...');
+
+    let fallbackUri = process.env.MONG_URI;
+    if (fallbackUri.includes('mongodb+srv://') && fallbackUri.includes('.mongodb.net')) {
+      const match = fallbackUri.match(/mongodb\+srv:\/\/([^:]+):([^@]+)@([^.\/]+)\.pehdsy7\.mongodb\.net\/?([^?]*)\??(.*)/);
+      if (match) {
+        const [, user, pass, cluster, db, opts] = match;
+        fallbackUri = `mongodb://${user}:${pass}@${cluster}-shard-00-00.pehdsy7.mongodb.net:27017,${cluster}-shard-00-01.pehdsy7.mongodb.net:27017,${cluster}-shard-00-02.pehdsy7.mongodb.net:27017/${db || 'blogsphere'}?ssl=true&authSource=admin&retryWrites=true&w=majority${opts ? '&' + opts : ''}`;
+      }
+    }
+
+    try {
+      await mongoose.connect(fallbackUri);
+      console.log('✅ Connected to MongoDB Atlas via Direct Shard Nodes!');
+      startServer();
+    } catch (fallbackErr) {
+      console.error('❌ Failed to connect to MongoDB Atlas:', err.message);
+      console.error('💡 Cause: Your local Wi-Fi / Router DNS or Firewall is blocking outbound MongoDB Atlas traffic.');
+      console.error('👉 Solution: Switch to Mobile Hotspot or change Windows DNS to 8.8.8.8 / 8.8.4.4.');
+    }
+  }
+};
+
+connectDB();

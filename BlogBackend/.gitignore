@@ -6,10 +6,6 @@
 # Node dependencies
 node_modules/
 
-# Production build
-dist/
-build/
-
 # Logs & temp
 *.log
 .DS_Store
